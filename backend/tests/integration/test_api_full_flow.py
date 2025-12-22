@@ -131,17 +131,20 @@ def wait_for_task_completion(project_id: str, task_id: str, timeout: int = 120):
 @pytest.fixture
 def project_id():
     """Fixture that creates a project and cleans up after test."""
-    created_project_id = None
+    created_project_ids = []
     
-    yield lambda pid: setattr(created_project_id, 'value', pid)
+    def register_project(pid):
+        created_project_ids.append(pid)
+    
+    yield register_project
     
     # Cleanup
-    if hasattr(created_project_id, 'value') and created_project_id.value:
+    for pid in created_project_ids:
         try:
-            requests.delete(f"{BASE_URL}/api/projects/{created_project_id.value}")
-            print(f"✓ Cleaned up project: {created_project_id.value}")
+            requests.delete(f"{BASE_URL}/api/projects/{pid}", timeout=10)
+            print(f"✓ Cleaned up project: {pid}")
         except Exception as e:
-            print(f"Failed to cleanup project {created_project_id.value}: {e}")
+            print(f"Failed to cleanup project {pid}: {e}")
 
 
 class TestAPIFullFlow:
