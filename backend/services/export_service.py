@@ -964,12 +964,24 @@ class ExportService:
         """
         for elem in elements:
             elem_type = elem.element_type
-            bbox = elem.bbox  # 使用局部坐标
             
-            # 转换BBox对象为列表
-            bbox_list = [bbox.x0, bbox.y0, bbox.x1, bbox.y1]
+            # 根据深度决定使用局部坐标还是全局坐标
+            # depth=0: 顶层元素，使用局部坐标（bbox）
+            # depth>0: 子元素，需要使用全局坐标（bbox_global）
+            if depth == 0:
+                bbox = elem.bbox  # 顶层元素使用局部坐标
+            else:
+                bbox = elem.bbox_global if hasattr(elem, 'bbox_global') and elem.bbox_global else elem.bbox
             
-            logger.info(f"{'  ' * depth}  添加元素: type={elem_type}, bbox={bbox_list}, content={elem.content[:30] if elem.content else None}, image_path={elem.image_path}")
+            # 转换BBox对象为列表并应用缩放
+            bbox_list = [
+                int(bbox.x0 * scale_x),
+                int(bbox.y0 * scale_y),
+                int(bbox.x1 * scale_x),
+                int(bbox.y1 * scale_y)
+            ]
+            
+            logger.info(f"{'  ' * depth}  添加元素: type={elem_type}, bbox={bbox_list}, content={elem.content[:30] if elem.content else None}, image_path={elem.image_path}, 使用{'全局' if depth > 0 else '局部'}坐标")
             
             # 根据类型添加元素（参考原实现的_add_mineru_text_to_slide和_add_mineru_image_to_slide）
             if elem_type in ['text', 'title']:
@@ -996,20 +1008,12 @@ class ExportService:
                     text = elem.content.strip()
                     if text:
                         try:
-                            # 使用全局坐标并应用缩放
-                            bbox_global = elem.bbox_global
-                            bbox = [
-                                int(bbox_global.x0 * scale_x),
-                                int(bbox_global.y0 * scale_y),
-                                int(bbox_global.x1 * scale_x),
-                                int(bbox_global.y1 * scale_y)
-                            ]
-                            
-                            # 使用已有的 add_text_element 方法添加文本框（不添加边框）
+                            # 表格单元格已经在上面统一处理了bbox_global和缩放
+                            # 直接使用bbox_list即可
                             builder.add_text_element(
                                 slide=slide,
                                 text=text,
-                                bbox=bbox,
+                                bbox=bbox_list,
                                 text_level=None,
                                 align='center'
                             )
