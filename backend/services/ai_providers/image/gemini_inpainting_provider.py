@@ -18,9 +18,10 @@ class GeminiInpaintingProvider:
     
     DEFAULT_MODEL = "gemini-2-5-flash-image-preview"
     DEFAULT_PROMPT = (
-        "1.Remove all text content; keep only the outermost rectangular frames and arrows (if any).\n"
-        "2.Keep the layout unchanged.\n"
-        "3.Change the background color to white."
+        "Based on the original image and the mask (white areas indicate regions to remove), "
+        "please remove all text and graphic content within the masked regions to create a clean background. "
+        "The resulting background should maintain the same style and be visually consistent with the original image. "
+        "Keep the layout structure unchanged."
     )
     
     def __init__(
@@ -160,4 +161,44 @@ class GeminiInpaintingProvider:
         except Exception as e:
             logger.error(f"❌ Gemini Inpainting 失败: {e}", exc_info=True)
             raise
+    
+    def inpaint_with_retry(
+        self,
+        original_image: Image.Image,
+        mask_image: Image.Image,
+        max_retries: int = 2,
+        retry_delay: int = 1
+    ) -> Optional[Image.Image]:
+        """
+        带重试的 inpaint 调用
+        
+        Args:
+            original_image: 原始图像
+            mask_image: 掩码图像
+            max_retries: 最大重试次数
+            retry_delay: 重试延迟（秒）
+            
+        Returns:
+            处理后的图像，失败返回 None
+        """
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                result = self.inpaint_image(original_image, mask_image)
+                if result is not None:
+                    return result
+                    
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ 第{attempt + 1}次失败，{retry_delay}秒后重试...")
+                    time.sleep(retry_delay)
+                    
+            except Exception as e:
+                logger.error(f"第{attempt + 1}次出错: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        
+        logger.error(f"❌ {max_retries}次尝试全部失败")
+        return None
+
 
