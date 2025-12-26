@@ -430,11 +430,27 @@ class ImageEditabilityService:
         clean_background = None
         if self.inpainting_service and elements:
             logger.info(f"{'  ' * depth}Step 3: 生成clean background...")
+            # 计算当前图像在根图像中的 crop_box
+            if depth == 0:
+                # 根图像，crop_box 就是整个图像
+                current_crop_box = (0, 0, width, height)
+            elif parent_bbox:
+                # 子图像，使用 bbox_global（在根图像坐标系中的位置）
+                current_crop_box = (
+                    int(parent_bbox.x0),
+                    int(parent_bbox.y0),
+                    int(parent_bbox.x1),
+                    int(parent_bbox.y1)
+                )
+            else:
+                current_crop_box = None
+            
             clean_background = self._generate_clean_background(
                 image_path=image_path,
                 elements=elements,
                 image_id=image_id,
-                root_image_path=root_image_path
+                root_image_path=root_image_path,
+                crop_box=current_crop_box
             )
             if clean_background:
                 logger.info(f"{'  ' * depth}Clean background生成成功: {clean_background}")
@@ -752,7 +768,8 @@ class ImageEditabilityService:
         elements: List[EditableElement],
         image_id: str,
         expand_pixels: int = 10,
-        root_image_path: Optional[str] = None
+        root_image_path: Optional[str] = None,
+        crop_box: Optional[tuple] = None
     ) -> Optional[str]:
         """生成clean background（消除所有元素）"""
         if not self.inpainting_service:
@@ -819,7 +836,8 @@ class ImageEditabilityService:
                 merge_bboxes=False,
                 merge_threshold=20,
                 save_mask_path=str(mask_path),
-                full_page_image=full_page_img
+                full_page_image=full_page_img,
+                crop_box=crop_box
             )
             
             if result_img is None:

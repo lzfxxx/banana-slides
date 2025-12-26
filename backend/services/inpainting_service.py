@@ -93,7 +93,8 @@ class InpaintingService:
         merge_threshold: int = 10,
         use_retry: bool = True,
         save_mask_path: Optional[str] = None,
-        full_page_image: Optional[Image.Image] = None
+        full_page_image: Optional[Image.Image] = None,
+        crop_box: Optional[tuple] = None
     ) -> Optional[Image.Image]:
         """
         根据边界框列表消除图像中的指定区域
@@ -110,6 +111,7 @@ class InpaintingService:
             use_retry: 是否使用重试机制（默认True）
             save_mask_path: Mask 保存路径（可选）
             full_page_image: 完整的 PPT 页面图像（仅用于 Gemini provider）
+            crop_box: 裁剪框 (x0, y0, x1, y1)，从完整页面结果中裁剪的区域（仅用于 Gemini provider）
             
         Returns:
             处理后的图像，失败返回 None
@@ -158,13 +160,15 @@ class InpaintingService:
                     original_image=image,
                     mask_image=mask,
                     max_retries=self.config.VOLCENGINE_INPAINTING_MAX_RETRIES,
-                    full_page_image=full_page_image
+                    full_page_image=full_page_image,
+                    crop_box=crop_box
                 )
             else:
                 result = self.provider.inpaint_image(
                     original_image=image,
                     mask_image=mask,
-                    full_page_image=full_page_image
+                    full_page_image=full_page_image,
+                    crop_box=crop_box
                 )
             
             if result is not None:

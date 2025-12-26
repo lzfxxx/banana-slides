@@ -86,7 +86,8 @@ class VolcengineInpaintingProvider:
         original_image: Image.Image,
         mask_image: Image.Image,
         inpaint_mode: str = "remove",
-        full_page_image: Optional[Image.Image] = None
+        full_page_image: Optional[Image.Image] = None,
+        crop_box: Optional[tuple] = None
     ) -> Optional[Image.Image]:
         """
         使用掩码消除图像中的指定区域（带指数避让重试）
@@ -243,9 +244,10 @@ class VolcengineInpaintingProvider:
         mask_image: Image.Image,
         max_retries: int = 2,  # 减少重试次数
         retry_delay: int = 1,
-        full_page_image: Optional[Image.Image] = None
+        full_page_image: Optional[Image.Image] = None,
+        crop_box: Optional[tuple] = None
     ) -> Optional[Image.Image]:
-        """带重试的inpaint调用（full_page_image 参数仅用于兼容性，火山引擎不使用）"""
+        """带重试的inpaint调用（full_page_image 和 crop_box 参数仅用于兼容性，火山引擎不使用）"""
         import time
         
         for attempt in range(max_retries):
