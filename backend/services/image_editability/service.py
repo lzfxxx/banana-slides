@@ -131,7 +131,8 @@ class ImageEditabilityService:
             image_id=image_id,
             parent_bbox=parent_bbox,
             image_size=extracted_image_size,
-            root_image_size=root_image_size
+            root_image_size=root_image_size,
+            source_image_path=image_path  # 传入源图片路径用于裁剪
         )
         
         logger.info(f"{'  ' * depth}提取到 {len(elements)} 个元素")
@@ -151,7 +152,8 @@ class ImageEditabilityService:
             )
         
         # 4. 递归处理子元素
-        if depth < self._max_depth:
+        # max_depth 语义：max_depth=1 表示只处理1层不递归，max_depth=2 递归一次
+        if depth + 1 < self._max_depth:
             self._process_children(
                 elements=elements,
                 current_image_path=image_path,
@@ -209,10 +211,27 @@ class ImageEditabilityService:
         image_id: str,
         parent_bbox: Optional[BBox],
         image_size: Tuple[int, int],
-        root_image_size: Tuple[int, int]
+        root_image_size: Tuple[int, int],
+        source_image_path: Optional[str] = None
     ) -> List[EditableElement]:
-        """将提取器返回的字典转换为EditableElement对象"""
+        """
+        将提取器返回的字典转换为EditableElement对象
+        
+        对每个元素根据 bbox 从原图裁剪并保存图片，不依赖 MinerU 提取的图片。
+        这样所有元素（包括文字）都有 image_path，可用于样式提取。
+        """
         elements = []
+        
+        # 准备输出目录
+        output_dir = None
+        source_img = None
+        if source_image_path:
+            output_dir = self._upload_folder / 'editable_images' / image_id / 'elements'
+            output_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                source_img = Image.open(source_image_path)
+            except Exception as e:
+                logger.warning(f"无法加载源图片进行裁剪: {e}")
         
         for idx, elem_dict in enumerate(element_dicts):
             bbox_list = elem_dict['bbox']
@@ -234,17 +253,41 @@ class ImageEditabilityService:
                     parent_image_size=root_image_size
                 )
             
+            # 为每个元素裁剪并保存图片（统一使用自己裁剪的图片）
+            element_image_path = None
+            if source_img and output_dir:
+                try:
+                    # 裁剪元素区域
+                    crop_box = (
+                        max(0, int(local_bbox.x0)),
+                        max(0, int(local_bbox.y0)),
+                        min(source_img.width, int(local_bbox.x1)),
+                        min(source_img.height, int(local_bbox.y1))
+                    )
+                    
+                    # 检查裁剪区域有效性
+                    if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
+                        cropped = source_img.crop(crop_box)
+                        element_image_path = str(output_dir / f"{idx}_{elem_dict['type']}.png")
+                        cropped.save(element_image_path)
+                except Exception as e:
+                    logger.warning(f"裁剪元素 {idx} 失败: {e}")
+            
             element = EditableElement(
                 element_id=f"{image_id}_{idx}",
                 element_type=elem_dict['type'],
                 bbox=local_bbox,
                 bbox_global=global_bbox,
                 content=elem_dict.get('content'),
-                image_path=elem_dict.get('image_path'),
+                image_path=element_image_path,  # 使用自己裁剪的图片路径
                 metadata=elem_dict.get('metadata', {})
             )
             
             elements.append(element)
+        
+        # 关闭源图片
+        if source_img:
+            source_img.close()
         
         return elements
     
@@ -351,7 +394,7 @@ class ImageEditabilityService:
         current_image_size: Tuple[int, int],
         root_image_path: str
     ):
-        """递归处理子元素（通过裁剪原图获取子图）"""
+        """递归处理子元素（通过裁剪原图获取子图，并行处理多个子元素）"""
         logger.info(f"{'  ' * depth}递归处理子元素...")
         
         # 筛选需要递归的元素
@@ -369,10 +412,11 @@ class ImageEditabilityService:
         if not elements_to_process:
             return
         
-        # 递归处理（串行，因为并发由外部控制）
-        for element in elements_to_process:
-            logger.info(f"{'  ' * depth}  → 递归: {element.element_id}")
-            
+        # 并行处理多个子元素
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        def process_single_element(element):
+            """处理单个子元素"""
             try:
                 # 从当前图片裁剪出子区域
                 child_image_path = crop_element_from_image(
@@ -390,10 +434,24 @@ class ImageEditabilityService:
                     root_image_path=root_image_path
                 )
                 
-                element.children = child_editable.elements
-                element.inpainted_background_path = child_editable.clean_background
-                
-                logger.info(f"{'  ' * depth}  ✓ 完成: {len(child_editable.elements)} 个子元素")
+                return element, child_editable, None
             
             except Exception as e:
-                logger.error(f"{'  ' * depth}  ✗ 失败: {e}")
+                return element, None, e
+        
+        logger.info(f"{'  ' * depth}  并行处理 {len(elements_to_process)} 个子元素...")
+        
+        # 使用线程池并行处理
+        max_workers = min(4, len(elements_to_process))  # 限制并发数
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_single_element, elem): elem for elem in elements_to_process}
+            
+            for future in as_completed(futures):
+                element, child_editable, error = future.result()
+                
+                if error:
+                    logger.error(f"{'  ' * depth}  ✗ {element.element_id} 失败: {error}")
+                else:
+                    element.children = child_editable.elements
+                    element.inpainted_background_path = child_editable.clean_background
+                    logger.info(f"{'  ' * depth}  ✓ {element.element_id} 完成: {len(child_editable.elements)} 个子元素")

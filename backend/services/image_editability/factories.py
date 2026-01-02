@@ -7,6 +7,12 @@ from pathlib import Path
 
 from .extractors import ElementExtractor, MinerUElementExtractor, BaiduOCRElementExtractor, ExtractorRegistry
 from .inpaint_providers import InpaintProvider, DefaultInpaintProvider, GenerativeEditInpaintProvider, InpaintProviderRegistry
+from .text_attribute_extractors import (
+    TextAttributeExtractor,
+    CaptionModelTextAttributeExtractor,
+    TextAttributeExtractorRegistry,
+    TextStyleResult
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,26 +125,19 @@ class InpaintProviderFactory:
         Returns:
             InpaintProvider实例，失败返回None
         """
-        if inpainting_service is not None:
-            logger.info("使用提供的InpaintingService")
-            return DefaultInpaintProvider(inpainting_service)
-        
-        # 尝试自动初始化
-        try:
+        if inpainting_service is None:
             from services.inpainting_service import get_inpainting_service
             inpainting_service = get_inpainting_service()
-            logger.info("自动初始化DefaultInpaintProvider")
-            return DefaultInpaintProvider(inpainting_service)
-        except Exception as e:
-            logger.warning(f"无法初始化Inpainting服务: {e}")
-            return None
+        
+        logger.info("创建DefaultInpaintProvider")
+        return DefaultInpaintProvider(inpainting_service)
     
     @staticmethod
     def create_generative_edit_provider(
         ai_service: Optional[Any] = None,
         aspect_ratio: str = "16:9",
         resolution: str = "2K"
-    ) -> Optional[InpaintProvider]:
+    ) -> InpaintProvider:
         """
         创建基于生成式大模型的Inpaint提供者
         
@@ -151,21 +150,17 @@ class InpaintProviderFactory:
             resolution: 目标分辨率
         
         Returns:
-            GenerativeEditInpaintProvider实例，失败返回None
-        """
-        if ai_service is not None:
-            logger.info("使用提供的AIService创建GenerativeEditInpaintProvider")
-            return GenerativeEditInpaintProvider(ai_service, aspect_ratio, resolution)
+            GenerativeEditInpaintProvider实例
         
-        # 尝试自动获取AI服务
-        try:
+        Raises:
+            如果AI服务初始化失败，会抛出异常
+        """
+        if ai_service is None:
             from services.ai_service_manager import get_ai_service
             ai_service = get_ai_service()
-            logger.info("自动初始化GenerativeEditInpaintProvider")
-            return GenerativeEditInpaintProvider(ai_service, aspect_ratio, resolution)
-        except Exception as e:
-            logger.warning(f"无法初始化生成式编辑服务: {e}")
-            return None
+        
+        logger.info("创建GenerativeEditInpaintProvider")
+        return GenerativeEditInpaintProvider(ai_service, aspect_ratio, resolution)
     
     @staticmethod
     def create_inpaint_registry(
@@ -253,9 +248,9 @@ class ServiceConfig:
     @classmethod
     def from_defaults(
         cls,
-        mineru_token: str,
-        mineru_api_base: str = "https://mineru.net",
-        upload_folder: str = "./uploads",
+        mineru_token: Optional[str] = None,
+        mineru_api_base: Optional[str] = None,
+        upload_folder: Optional[str] = None,
         ai_service: Optional[Any] = None,
         **kwargs
     ) -> 'ServiceConfig':
@@ -269,10 +264,12 @@ class ServiceConfig:
         
         支持动态注册新的元素类型到不同的提取器/重绘方法。
         
+        如果不提供参数，会自动从 Flask app.config 获取配置。
+        
         Args:
-            mineru_token: MinerU API token
-            mineru_api_base: MinerU API base URL
-            upload_folder: 上传文件夹路径
+            mineru_token: MinerU API token（可选，默认从 Flask config 获取）
+            mineru_api_base: MinerU API base URL（可选，默认从 Flask config 获取）
+            upload_folder: 上传文件夹路径（可选，默认从 Flask config 获取）
             ai_service: AI服务实例（可选，用于生成式重绘）
             **kwargs: 其他配置参数
                 - max_depth: 最大递归深度（默认1）
@@ -281,7 +278,31 @@ class ServiceConfig:
         
         Returns:
             ServiceConfig实例
+        
+        Raises:
+            ValueError: 如果 mineru_token 未配置
         """
+        # 自动从 Flask config 获取配置
+        from flask import current_app, has_app_context
+        
+        if has_app_context() and current_app:
+            if mineru_token is None:
+                mineru_token = current_app.config.get('MINERU_TOKEN')
+            if mineru_api_base is None:
+                mineru_api_base = current_app.config.get('MINERU_API_BASE', 'https://mineru.net')
+            if upload_folder is None:
+                upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+        else:
+            # 回退到默认值
+            if mineru_api_base is None:
+                mineru_api_base = 'https://mineru.net'
+            if upload_folder is None:
+                upload_folder = './uploads'
+        
+        # 验证必需配置
+        if not mineru_token:
+            raise ValueError("MinerU token is required. Please configure MINERU_TOKEN.")
+        
         from services.file_parser_service import FileParserService
         
         # 解析upload_folder路径
@@ -317,11 +338,8 @@ class ServiceConfig:
         
         # 创建重绘注册表 - 使用生成式重绘作为默认
         inpaint_registry = InpaintProviderRegistry()
-        if generative_provider:
-            inpaint_registry.register_default(generative_provider)
-            logger.info("✅ 重绘注册表已创建（GenerativeEdit通用）")
-        else:
-            logger.warning("⚠️ 未能创建生成式重绘提供者")
+        inpaint_registry.register_default(generative_provider)
+        logger.info("✅ 重绘注册表已创建（GenerativeEdit通用）")
         # 可通过 inpaint_registry.register('新类型', 新重绘方法) 动态扩展
         
         return cls(
@@ -332,4 +350,78 @@ class ServiceConfig:
             min_image_size=kwargs.get('min_image_size', 200),
             min_image_area=kwargs.get('min_image_area', 40000)
         )
+
+
+class TextAttributeExtractorFactory:
+    """文字属性提取器工厂"""
+    
+    @staticmethod
+    def create_caption_model_extractor(
+        ai_service: Optional[Any] = None,
+        prompt_template: Optional[str] = None
+    ) -> TextAttributeExtractor:
+        """
+        创建基于Caption Model的文字属性提取器
+        
+        使用视觉语言模型（如Gemini）分析文字区域图像，
+        通过生成JSON的方式获取字体颜色、是否粗体、是否斜体等属性。
+        
+        Args:
+            ai_service: AIService实例（可选，如果不提供则自动获取）
+            prompt_template: 自定义的prompt模板（可选），必须使用 {content_hint} 作为占位符
+        
+        Returns:
+            CaptionModelTextAttributeExtractor实例
+        
+        Raises:
+            如果AI服务初始化失败，会抛出异常
+        """
+        if ai_service is None:
+            from services.ai_service_manager import get_ai_service
+            ai_service = get_ai_service()
+        
+        logger.info("创建CaptionModelTextAttributeExtractor")
+        return CaptionModelTextAttributeExtractor(ai_service, prompt_template)
+    
+    @staticmethod
+    def create_text_attribute_registry(
+        caption_extractor: Optional[TextAttributeExtractor] = None,
+        ai_service: Optional[Any] = None
+    ) -> TextAttributeExtractorRegistry:
+        """
+        创建文字属性提取器注册表
+        
+        支持动态注册新元素类型，不限于预定义类型。
+        
+        Args:
+            caption_extractor: Caption Model提取器（可选，自动创建）
+            ai_service: AIService实例（可选，用于自动创建提取器）
+        
+        Returns:
+            配置好的TextAttributeExtractorRegistry实例
+        
+        Raises:
+            如果提取器创建失败，会抛出异常
+        """
+        # 自动创建提取器
+        if caption_extractor is None:
+            caption_extractor = TextAttributeExtractorFactory.create_caption_model_extractor(
+                ai_service=ai_service
+            )
+        
+        # 创建注册表
+        registry = TextAttributeExtractorRegistry()
+        
+        # 设置默认提取器
+        registry.register_default(caption_extractor)
+        
+        # 注册文本类型
+        registry.register_types(
+            ['text', 'title', 'paragraph', 'heading', 'table_cell'],
+            caption_extractor
+        )
+        
+        logger.info("创建TextAttributeExtractorRegistry")
+        
+        return registry
 

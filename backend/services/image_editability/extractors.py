@@ -282,13 +282,29 @@ class MinerUElementExtractor(ElementExtractor):
                 content = None
                 if block_type in ['text', 'title']:
                     if block.get('lines'):
-                        text_parts = []
+                        line_texts = []
                         for line in block['lines']:
+                            # 按顺序合并同一行的所有 span
+                            span_texts = []
                             for span in line.get('spans', []):
-                                if span.get('type') == 'text' and span.get('content'):
-                                    text_parts.append(span['content'])
-                        if text_parts:
-                            content = '\n'.join(text_parts).strip()
+                                span_type = span.get('type', '')
+                                span_content = span.get('content', '')
+                                
+                                if span_type == 'text' and span_content:
+                                    span_texts.append(span_content)
+                                elif span_type == 'inline_equation' and span_content:
+                                    # 处理行内公式：转换 LaTeX 为可显示文本
+                                    from utils.latex_utils import latex_to_text
+                                    converted = latex_to_text(span_content)
+                                    span_texts.append(converted)
+                            
+                            if span_texts:
+                                # 智能合并：如果前后都没有空格，直接连接
+                                line_text = ''.join(span_texts)
+                                line_texts.append(line_text)
+                        
+                        if line_texts:
+                            content = '\n'.join(line_texts).strip()
                 
                 # 提取img_path（图片/表格）- 转换为绝对路径
                 img_path = None

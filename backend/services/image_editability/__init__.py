@@ -58,10 +58,19 @@ from .inpaint_providers import (
     InpaintProviderRegistry
 )
 
+# 文字属性提取器
+from .text_attribute_extractors import (
+    TextStyleResult,
+    TextAttributeExtractor,
+    CaptionModelTextAttributeExtractor,
+    TextAttributeExtractorRegistry
+)
+
 # 工厂和配置
 from .factories import (
     ExtractorFactory,
     InpaintProviderFactory,
+    TextAttributeExtractorFactory,
     ServiceConfig
 )
 
@@ -85,9 +94,15 @@ __all__ = [
     'DefaultInpaintProvider',
     'GenerativeEditInpaintProvider',
     'InpaintProviderRegistry',
+    # 文字属性提取器
+    'TextStyleResult',
+    'TextAttributeExtractor',
+    'CaptionModelTextAttributeExtractor',
+    'TextAttributeExtractorRegistry',
     # 工厂和配置
     'ExtractorFactory',
     'InpaintProviderFactory',
+    'TextAttributeExtractorFactory',
     'ServiceConfig',
     # 主服务
     'ImageEditabilityService',
