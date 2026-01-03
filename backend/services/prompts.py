@@ -822,6 +822,7 @@ def get_batch_text_attribute_extraction_prompt(text_elements_json: str) -> str:
 
 请返回一个 JSON 数组，数组中每个对象对应输入的一个元素（按相同顺序），包含以下字段：
 - element_id: 与输入相同的元素ID
+- text_content: 文字内容
 - font_color: 颜色十六进制值
 - is_bold: 布尔值
 - is_italic: 布尔值
@@ -833,6 +834,7 @@ def get_batch_text_attribute_extraction_prompt(text_elements_json: str) -> str:
 [
     {{
         "element_id": "xxx",
+        "text_content": "文字内容",
         "font_color": "#RRGGBB",
         "is_bold": true/false,
         "is_italic": true/false,
