@@ -647,6 +647,172 @@ class ExportService:
         return all_results
     
     @staticmethod
+    def _batch_extract_text_styles_hybrid(
+        editable_images: List,  # List[EditableImage]
+        text_attribute_extractor,
+        max_workers: int = 8
+    ) -> Dict[str, Any]:
+        """
+        【混合策略】结合全局识别和单个裁剪识别的优势
+        
+        策略：
+        - 全局识别（全图分析）：获取 is_bold、is_italic、is_underline、text_alignment
+          因为这些属性需要看整体布局和上下文才能判断准确
+        - 单个裁剪识别：获取 font_color
+          因为颜色需要精确看局部像素才能识别准确
+        
+        Args:
+            editable_images: EditableImage列表，每个对应一张PPT页面
+            text_attribute_extractor: 文本属性提取器
+            max_workers: 并发数
+        
+        Returns:
+            字典，key为element_id，value为TextStyleResult（合并后的结果）
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from services.image_editability.text_attribute_extractors import TextStyleResult
+        
+        if not editable_images or not text_attribute_extractor:
+            return {}
+        
+        # 检查提取器是否支持批量提取
+        if not hasattr(text_attribute_extractor, 'extract_batch_with_full_image'):
+            logger.warning("提取器不支持混合策略，回退到单个裁剪识别")
+            all_text_items = []
+            for editable_img in editable_images:
+                text_items = ExportService._collect_text_elements_for_extraction(editable_img.elements)
+                all_text_items.extend(text_items)
+            return ExportService._batch_extract_text_styles(
+                text_items=all_text_items,
+                text_attribute_extractor=text_attribute_extractor,
+                max_workers=max_workers
+            )
+        
+        logger.info(f"【混合策略】开始分析 {len(editable_images)} 页的文本样式...")
+        logger.info(f"  - 全局识别: is_bold, is_italic, is_underline, text_alignment")
+        logger.info(f"  - 单个识别: font_color")
+        
+        # Step 1: 收集所有文本元素
+        all_text_items = []  # 用于单个裁剪识别 (element_id, image_path, content)
+        page_text_elements = {}  # 用于全局识别 {page_idx: [text_elements]}
+        
+        for page_idx, editable_img in enumerate(editable_images):
+            # 收集用于单个裁剪识别的数据
+            text_items = ExportService._collect_text_elements_for_extraction(editable_img.elements)
+            all_text_items.extend(text_items)
+            
+            # 收集用于全局识别的数据
+            batch_elements = ExportService._collect_text_elements_for_batch_extraction(editable_img.elements)
+            if batch_elements:
+                page_text_elements[page_idx] = {
+                    'image_path': editable_img.image_path,
+                    'elements': batch_elements
+                }
+        
+        if not all_text_items:
+            return {}
+        
+        # Step 2: 并行执行两种识别
+        global_results = {}  # 全局识别结果
+        local_results = {}   # 单个裁剪识别结果
+        
+        def extract_global_for_page(page_idx, page_data):
+            """全局识别单页"""
+            try:
+                results = text_attribute_extractor.extract_batch_with_full_image(
+                    full_image=page_data['image_path'],
+                    text_elements=page_data['elements']
+                )
+                return page_idx, results
+            except Exception as e:
+                logger.warning(f"全局识别页面 {page_idx + 1} 失败: {e}")
+                return page_idx, {}
+        
+        def extract_local_single(item):
+            """单个裁剪识别"""
+            element_id, image_path, text_content = item
+            try:
+                style = text_attribute_extractor.extract(
+                    image=image_path,
+                    text_content=text_content
+                )
+                return element_id, style
+            except Exception as e:
+                logger.warning(f"单个识别失败 [{element_id}]: {e}")
+                return element_id, None
+        
+        # 并发执行全局识别和单个裁剪识别
+        logger.info(f"  并发执行: 全局识别 {len(page_text_elements)} 页 + 单个识别 {len(all_text_items)} 个元素...")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交全局识别任务
+            global_futures = {
+                executor.submit(extract_global_for_page, idx, data): ('global', idx)
+                for idx, data in page_text_elements.items()
+            }
+            
+            # 提交单个裁剪识别任务
+            local_futures = {
+                executor.submit(extract_local_single, item): ('local', item[0])
+                for item in all_text_items
+            }
+            
+            # 收集全局识别结果
+            for future in as_completed(global_futures):
+                task_type, page_idx = global_futures[future]
+                try:
+                    _, page_results = future.result()
+                    global_results.update(page_results)
+                except Exception as e:
+                    logger.error(f"全局识别任务失败: {e}")
+            
+            # 收集单个裁剪识别结果
+            for future in as_completed(local_futures):
+                task_type, element_id = local_futures[future]
+                try:
+                    elem_id, style = future.result()
+                    if style is not None:
+                        local_results[elem_id] = style
+                except Exception as e:
+                    logger.error(f"单个识别任务失败: {e}")
+        
+        # Step 3: 合并结果
+        # 优先使用全局识别的布局属性，使用单个识别的颜色属性
+        merged_results = {}
+        
+        all_element_ids = set(global_results.keys()) | set(local_results.keys())
+        
+        for element_id in all_element_ids:
+            global_style = global_results.get(element_id)
+            local_style = local_results.get(element_id)
+            
+            if global_style and local_style:
+                # 混合：颜色用单个识别，布局用全局识别
+                merged_results[element_id] = TextStyleResult(
+                    font_color_rgb=local_style.font_color_rgb,  # 单个识别的颜色
+                    is_bold=global_style.is_bold,              # 全局识别的粗体
+                    is_italic=global_style.is_italic,          # 全局识别的斜体
+                    is_underline=global_style.is_underline,    # 全局识别的下划线
+                    text_alignment=global_style.text_alignment, # 全局识别的对齐
+                    confidence=0.9,
+                    metadata={
+                        'source': 'hybrid',
+                        'color_source': 'local',
+                        'layout_source': 'global'
+                    }
+                )
+            elif local_style:
+                # 只有单个识别结果
+                merged_results[element_id] = local_style
+            elif global_style:
+                # 只有全局识别结果
+                merged_results[element_id] = global_style
+        
+        logger.info(f"✓ 混合策略完成: 全局识别 {len(global_results)} 个, 单个识别 {len(local_results)} 个, 合并 {len(merged_results)} 个")
+        
+        return merged_results
+    
+    @staticmethod
     def create_editable_pptx_with_recursive_analysis(
         image_paths: List[str] = None,
         output_file: str = None,
@@ -738,23 +904,24 @@ class ExportService:
                 
                 editable_images = results
         
-        # 2.5. 并行提取所有文本元素的样式（如果提供了提取器）
-        # 注：新的全图批量分析方法 _batch_extract_text_styles_with_full_image 已实现但暂未启用
-        # 经测试，逐个裁剪区域分析的效果更好，继续使用旧逻辑
+        # 2.5. 使用混合策略提取所有文本元素的样式（如果提供了提取器）
+        # 混合策略：全局识别（粗体/斜体/下划线/对齐）+ 单个裁剪识别（颜色）
         text_styles_cache = {}
         if text_attribute_extractor:
-            report_progress("样式提取", "开始提取文本样式...", 45)
-            all_text_items = []
-            for editable_img in editable_images:
-                text_items = ExportService._collect_text_elements_for_extraction(editable_img.elements)
-                all_text_items.extend(text_items)
+            report_progress("样式提取", "开始提取文本样式（混合策略）...", 45)
             
-            if all_text_items:
-                report_progress("样式提取", f"并行提取 {len(all_text_items)} 个文本元素的样式...", 50)
-                text_styles_cache = ExportService._batch_extract_text_styles(
-                    text_items=all_text_items,
+            # 统计文本元素数量
+            total_text_count = sum(
+                len(ExportService._collect_text_elements_for_extraction(img.elements))
+                for img in editable_images
+            )
+            
+            if total_text_count > 0:
+                report_progress("样式提取", f"混合策略分析 {total_text_count} 个文本元素...", 50)
+                text_styles_cache = ExportService._batch_extract_text_styles_hybrid(
+                    editable_images=editable_images,
                     text_attribute_extractor=text_attribute_extractor,
-                    max_workers=max_workers * 2  # 文本属性提取使用更高并发
+                    max_workers=max_workers * 2
                 )
                 report_progress("样式提取", f"✓ 完成 {len(text_styles_cache)} 个文本样式提取", 70)
         

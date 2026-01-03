@@ -1,10 +1,14 @@
 """
 测试指定图片导出为可编辑PPTX
+
+用法: python test_specific_image.py <图片路径>
+示例: python test_specific_image.py /mnt/d/Desktop/下载.png
 """
 import os
 import sys
 import logging
 import time
+import argparse
 from pathlib import Path
 
 # 添加backend目录到路径
@@ -19,8 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    # 测试图片路径（WSL格式）
-    test_image = "/mnt/d/Desktop/下载.png"
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='测试指定图片导出为可编辑PPTX')
+    parser.add_argument('image_path', help='要处理的图片路径')
+    args = parser.parse_args()
+    
+    test_image = args.image_path
     
     print("\n" + "="*80)
     print("测试递归图片可编辑化服务 - 单张图片导出PPTX")
