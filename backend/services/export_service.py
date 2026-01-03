@@ -458,10 +458,12 @@ class ExportService:
         max_workers: int = 8
     ) -> Dict[str, Any]:
         """
-        【旧逻辑 - 已弃用】批量并行提取文本样式（逐个裁剪区域分析）
+        批量并行提取文本样式（逐个裁剪区域分析）
         
-        此方法对每一段文字的裁剪区域单独进行分析，无法看到全局信息。
-        请使用 _batch_extract_text_styles_with_full_image 方法替代。
+        此方法对每一段文字的裁剪区域单独进行分析。
+        经测试，此方法效果较好，目前仍在使用。
+        
+        备选方案：_batch_extract_text_styles_with_full_image 可一次性分析全图所有文本。
         
         Args:
             text_items: 元组列表，每个元组为 (element_id, image_path, text_content)
@@ -476,7 +478,7 @@ class ExportService:
         if not text_items or not text_attribute_extractor:
             return {}
         
-        logger.info(f"【旧逻辑】并行提取 {len(text_items)} 个文本元素的样式（并发数: {max_workers}）...")
+        logger.info(f"并行提取 {len(text_items)} 个文本元素的样式（并发数: {max_workers}）...")
         
         results = {}
         
@@ -718,16 +720,23 @@ class ExportService:
                 
                 editable_images = results
         
-        # 2.5. 使用全图批量提取所有文本元素的样式（如果提供了提取器）
+        # 2.5. 并行提取所有文本元素的样式（如果提供了提取器）
+        # 注：新的全图批量分析方法 _batch_extract_text_styles_with_full_image 已实现但暂未启用
+        # 经测试，逐个裁剪区域分析的效果更好，继续使用旧逻辑
         text_styles_cache = {}
         if text_attribute_extractor:
-            logger.info(f"Step 2: 使用全图批量分析文本样式（新逻辑）...")
-            # 使用新的批量提取方法：给模型提供全图和所有文本bbox，一次性分析
-            text_styles_cache = ExportService._batch_extract_text_styles_with_full_image(
-                editable_images=editable_images,
-                text_attribute_extractor=text_attribute_extractor,
-                max_workers=max_workers  # 按页面并发
-            )
+            logger.info(f"Step 2: 批量提取文本样式...")
+            all_text_items = []
+            for editable_img in editable_images:
+                text_items = ExportService._collect_text_elements_for_extraction(editable_img.elements)
+                all_text_items.extend(text_items)
+            
+            if all_text_items:
+                text_styles_cache = ExportService._batch_extract_text_styles(
+                    text_items=all_text_items,
+                    text_attribute_extractor=text_attribute_extractor,
+                    max_workers=max_workers * 2  # 文本属性提取使用更高并发
+                )
         
         logger.info(f"Step 4: 创建PPTX...")
         
