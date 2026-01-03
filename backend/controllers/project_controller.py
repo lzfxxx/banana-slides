@@ -19,7 +19,10 @@ from services.task_manager import (
     generate_descriptions_task,
     generate_images_task
 )
-from utils import success_response, error_response, not_found, bad_request
+from utils import (
+    success_response, error_response, not_found, bad_request,
+    parse_page_ids_from_body, get_filtered_pages
+)
 
 logger = logging.getLogger(__name__)
 
@@ -670,19 +673,9 @@ def generate_images(project_id):
         
         data = request.get_json() or {}
         
-        # Get page_ids from request body (optional array of IDs)
-        selected_page_ids = data.get('page_ids', [])
-        if not isinstance(selected_page_ids, list):
-            selected_page_ids = []
-        
-        # Get pages (filtered by page_ids if provided)
-        if selected_page_ids:
-            pages = Page.query.filter(
-                Page.project_id == project_id,
-                Page.id.in_(selected_page_ids)
-            ).order_by(Page.order_index).all()
-        else:
-            pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+        # Get page_ids from request body and fetch filtered pages
+        selected_page_ids = parse_page_ids_from_body(data)
+        pages = get_filtered_pages(project_id, selected_page_ids if selected_page_ids else None)
         
         if not pages:
             return bad_request("No pages found for project")

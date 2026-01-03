@@ -1,5 +1,5 @@
 // TODO: split components
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import {
   Home,
@@ -111,6 +111,11 @@ export const SlidePreview: React.FC = () => {
   const [selectionRect, setSelectionRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const { show, ToastContainer } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
+
+  // Memoize pages with generated images to avoid re-computing in multiple places
+  const pagesWithImages = useMemo(() => {
+    return currentProject?.pages.filter(p => p.id && p.generated_image_path) || [];
+  }, [currentProject?.pages]);
 
   // 加载项目数据 & 用户模板
   useEffect(() => {
@@ -560,10 +565,7 @@ export const SlidePreview: React.FC = () => {
   };
 
   const selectAllPages = () => {
-    if (!currentProject) return;
-    const allPageIds = currentProject.pages
-      .filter(p => p.id && p.generated_image_path)
-      .map(p => p.id!);
+    const allPageIds = pagesWithImages.map(p => p.id!);
     setSelectedPageIds(new Set(allPageIds));
   };
 
@@ -592,7 +594,6 @@ export const SlidePreview: React.FC = () => {
   const handleExport = async (type: 'pptx' | 'pdf' | 'editable-pptx') => {
     setShowExportMenu(false);
     const pageIds = getSelectedPageIdsForExport();
-    console.log('[handleExport] type:', type, 'isMultiSelectMode:', isMultiSelectMode, 'selectedPageIds:', Array.from(selectedPageIds), 'pageIds for export:', pageIds);
     if (type === 'pptx') {
       await exportPPTX(pageIds);
     } else if (type === 'pdf') {
@@ -922,10 +923,10 @@ export const SlidePreview: React.FC = () => {
               {isMultiSelectMode && (
                 <>
                   <button
-                    onClick={selectedPageIds.size === currentProject.pages.filter(p => p.generated_image_path).length ? deselectAllPages : selectAllPages}
+                    onClick={selectedPageIds.size === pagesWithImages.length ? deselectAllPages : selectAllPages}
                     className="text-gray-500 hover:text-banana-600 transition-colors"
                   >
-                    {selectedPageIds.size === currentProject.pages.filter(p => p.generated_image_path).length ? '取消全选' : '全选'}
+                    {selectedPageIds.size === pagesWithImages.length ? '取消全选' : '全选'}
                   </button>
                   {selectedPageIds.size > 0 && (
                     <span className="text-banana-600 font-medium">

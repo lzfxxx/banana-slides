@@ -408,6 +408,16 @@ export const getTaskStatus = async (projectId: string, taskId: string): Promise<
 // ===== 导出 =====
 
 /**
+ * Helper function to build query string with page_ids
+ */
+const buildPageIdsQuery = (pageIds?: string[]): string => {
+  if (!pageIds || pageIds.length === 0) return '';
+  const params = new URLSearchParams();
+  params.set('page_ids', pageIds.join(','));
+  return `?${params.toString()}`;
+};
+
+/**
  * 导出为PPTX
  * @param projectId 项目ID
  * @param pageIds 可选的页面ID列表，如果不提供则导出所有页面
@@ -416,13 +426,7 @@ export const exportPPTX = async (
   projectId: string,
   pageIds?: string[]
 ): Promise<ApiResponse<{ download_url: string; download_url_absolute?: string }>> => {
-  const params = new URLSearchParams();
-  if (pageIds && pageIds.length > 0) {
-    params.set('page_ids', pageIds.join(','));
-  }
-  const queryString = params.toString();
-  const url = `/api/projects/${projectId}/export/pptx${queryString ? `?${queryString}` : ''}`;
-  console.log('[exportPPTX] pageIds:', pageIds, 'url:', url);
+  const url = `/api/projects/${projectId}/export/pptx${buildPageIdsQuery(pageIds)}`;
   const response = await apiClient.get<
     ApiResponse<{ download_url: string; download_url_absolute?: string }>
   >(url);
@@ -438,12 +442,7 @@ export const exportPDF = async (
   projectId: string,
   pageIds?: string[]
 ): Promise<ApiResponse<{ download_url: string; download_url_absolute?: string }>> => {
-  const params = new URLSearchParams();
-  if (pageIds && pageIds.length > 0) {
-    params.set('page_ids', pageIds.join(','));
-  }
-  const queryString = params.toString();
-  const url = `/api/projects/${projectId}/export/pdf${queryString ? `?${queryString}` : ''}`;
+  const url = `/api/projects/${projectId}/export/pdf${buildPageIdsQuery(pageIds)}`;
   const response = await apiClient.get<
     ApiResponse<{ download_url: string; download_url_absolute?: string }>
   >(url);

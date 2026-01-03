@@ -9,6 +9,7 @@ from typing import Callable, List, Dict, Any
 from datetime import datetime
 from sqlalchemy import func
 from models import db, Task, Page, Material, PageImageVersion
+from utils import get_filtered_pages
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -304,13 +305,7 @@ def generate_images_task(task_id: str, project_id: str, ai_service, file_service
             db.session.commit()
             
             # Get pages for this project (filtered by page_ids if provided)
-            if page_ids:
-                pages = Page.query.filter(
-                    Page.project_id == project_id,
-                    Page.id.in_(page_ids)
-                ).order_by(Page.order_index).all()
-            else:
-                pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+            pages = get_filtered_pages(project_id, page_ids)
             pages_data = ai_service.flatten_outline(outline)
             
             # 注意：不在任务开始时获取模板路径，而是在每个子线程中动态获取
@@ -859,13 +854,7 @@ def export_editable_pptx_with_recursive_analysis_task(
                 raise ValueError(f'Project {project_id} not found')
             
             # Get pages (filtered by page_ids if provided)
-            if page_ids:
-                pages = Page.query.filter(
-                    Page.project_id == project_id,
-                    Page.id.in_(page_ids)
-                ).order_by(Page.order_index).all()
-            else:
-                pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+            pages = get_filtered_pages(project_id, page_ids)
             if not pages:
                 raise ValueError('No pages found for project')
             
