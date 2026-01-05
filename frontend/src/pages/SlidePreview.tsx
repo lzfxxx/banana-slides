@@ -32,7 +32,7 @@ import { SlideCard } from '@/components/preview/SlideCard';
 import { useProjectStore } from '@/store/useProjectStore';
 import { useExportTasksStore, type ExportTaskType } from '@/store/useExportTasksStore';
 import { getImageUrl } from '@/api/client';
-import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate, exportPPTX as apiExportPPTX, exportPDF as apiExportPDF, exportEditablePPTX as apiExportEditablePPTX } from '@/api/endpoints';
+import { getPageImageVersions, setCurrentImageVersion, updateProject, uploadTemplate, exportPPTX as apiExportPPTX, exportPDF as apiExportPDF, exportEditablePPTX as apiExportEditablePPTX, exportEditablePPTXImg2Slides as apiExportEditablePPTXVision } from '@/api/endpoints';
 import type { ImageVersion, DescriptionContent, ExportExtractorMethod, ExportInpaintMethod } from '@/types';
 import { normalizeErrorMessage } from '@/utils';
 
@@ -605,7 +605,7 @@ export const SlidePreview: React.FC = () => {
     return Array.from(selectedPageIds);
   };
 
-  const handleExport = async (type: 'pptx' | 'pdf' | 'editable-pptx') => {
+  const handleExport = async (type: 'pptx' | 'pdf' | 'editable-pptx' | 'editable-pptx-vision') => {
     setShowExportMenu(false);
     if (!projectId) return;
     
@@ -660,6 +660,25 @@ export const SlidePreview: React.FC = () => {
           
           // Start polling in background (non-blocking)
           pollExportTask(exportTaskId, projectId, taskId);
+        }
+      } else if (type === 'editable-pptx-vision') {
+        // Vision export using img2slides - synchronous, direct download
+        show({ message: 'Vision导出进行中，请稍候...', type: 'success' });
+
+        const response = await apiExportEditablePPTXVision(projectId, 'gemini');
+        const downloadUrl = response.data?.download_url || response.data?.download_url_absolute;
+        if (downloadUrl) {
+          addTask({
+            id: exportTaskId,
+            taskId: '',
+            projectId,
+            type: 'editable-pptx',
+            status: 'COMPLETED',
+            downloadUrl,
+            pageIds: pageIds,
+          });
+          window.open(downloadUrl, '_blank');
+          show({ message: 'Vision导出成功', type: 'success' });
         }
       }
     } catch (error: any) {
@@ -1007,6 +1026,12 @@ export const SlidePreview: React.FC = () => {
                   className="w-full px-4 py-2 text-left hover:bg-gray-50 transition-colors text-sm"
                 >
                   导出可编辑 PPTX（Beta）
+                </button>
+                <button
+                  onClick={() => handleExport('editable-pptx-vision')}
+                  className="w-full px-4 py-2 text-left hover:bg-gray-50 transition-colors text-sm"
+                >
+                  导出可编辑 PPTX（Vision）
                 </button>
                 <button
                   onClick={() => handleExport('pdf')}

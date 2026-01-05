@@ -6,7 +6,7 @@ import os
 import io
 
 from flask import Blueprint, request, current_app
-from models import db, Project, Page, Task
+from models import db, Project, Page, Task, Settings
 from utils import (
     error_response, not_found, bad_request, success_response,
     parse_page_ids_from_query, parse_page_ids_from_body, get_filtered_pages
@@ -23,11 +23,11 @@ export_bp = Blueprint('export', __name__, url_prefix='/api/projects')
 def export_pptx(project_id):
     """
     GET /api/projects/{project_id}/export/pptx?filename=...&page_ids=id1,id2,id3 - Export PPTX
-    
+
     Query params:
         - filename: optional custom filename
         - page_ids: optional comma-separated page IDs to export (if not provided, exports all pages)
-    
+
     Returns:
         JSON with download URL, e.g.
         {
@@ -40,36 +40,36 @@ def export_pptx(project_id):
     """
     try:
         project = Project.query.get(project_id)
-        
+
         if not project:
             return not_found('Project')
-        
+
         # Get page_ids from query params and fetch filtered pages
         selected_page_ids = parse_page_ids_from_query(request)
         logger.debug(f"[export_pptx] selected_page_ids: {selected_page_ids}")
-        
+
         pages = get_filtered_pages(project_id, selected_page_ids if selected_page_ids else None)
         logger.debug(f"[export_pptx] Exporting {len(pages)} pages")
-        
+
         if not pages:
             return bad_request("No pages found for project")
-        
+
         # Get image paths
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
-        
+
         image_paths = []
         for page in pages:
             if page.generated_image_path:
                 abs_path = file_service.get_absolute_path(page.generated_image_path)
                 image_paths.append(abs_path)
-        
+
         if not image_paths:
             return bad_request("No generated images found for project")
-        
+
         # Determine export directory and filename
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
         exports_dir = file_service._get_exports_dir(project_id)
-        
+
         # Get filename from query params or use default
         filename = request.args.get('filename', f'presentation_{project_id}.pptx')
         if not filename.endswith('.pptx'):
@@ -92,7 +92,7 @@ def export_pptx(project_id):
             },
             message="Export PPTX task created"
         )
-    
+
     except Exception as e:
         return error_response('SERVER_ERROR', str(e), 500)
 
@@ -101,11 +101,11 @@ def export_pptx(project_id):
 def export_pdf(project_id):
     """
     GET /api/projects/{project_id}/export/pdf?filename=...&page_ids=id1,id2,id3 - Export PDF
-    
+
     Query params:
         - filename: optional custom filename
         - page_ids: optional comma-separated page IDs to export (if not provided, exports all pages)
-    
+
     Returns:
         JSON with download URL, e.g.
         {
@@ -118,29 +118,29 @@ def export_pdf(project_id):
     """
     try:
         project = Project.query.get(project_id)
-        
+
         if not project:
             return not_found('Project')
-        
+
         # Get page_ids from query params and fetch filtered pages
         selected_page_ids = parse_page_ids_from_query(request)
         pages = get_filtered_pages(project_id, selected_page_ids if selected_page_ids else None)
-        
+
         if not pages:
             return bad_request("No pages found for project")
-        
+
         # Get image paths
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
-        
+
         image_paths = []
         for page in pages:
             if page.generated_image_path:
                 abs_path = file_service.get_absolute_path(page.generated_image_path)
                 image_paths.append(abs_path)
-        
+
         if not image_paths:
             return bad_request("No generated images found for project")
-        
+
         # Determine export directory and filename
         exports_dir = file_service._get_exports_dir(project_id)
 
@@ -166,7 +166,7 @@ def export_pdf(project_id):
             },
             message="Export PDF task created"
         )
-    
+
     except Exception as e:
         return error_response('SERVER_ERROR', str(e), 500)
 
@@ -175,16 +175,16 @@ def export_pdf(project_id):
 def export_editable_pptx(project_id):
     """
     POST /api/projects/{project_id}/export/editable-pptx - 导出可编辑PPTX（异步）
-    
+
     使用递归分析方法（支持任意尺寸、递归子图分析）
-    
+
     这个端点创建一个异步任务来执行以下操作：
     1. 递归分析图片（支持任意尺寸和分辨率）
     2. 转换为PDF并上传MinerU识别
     3. 提取元素bbox和生成clean background（inpainting）
     4. 递归处理图片/图表中的子元素
     5. 创建可编辑PPTX
-    
+
     Request body (JSON):
         {
             "filename": "optional_custom_name.pptx",
@@ -192,7 +192,7 @@ def export_editable_pptx(project_id):
             "max_depth": 1,      // 可选，递归深度（默认1=不递归，2=递归一层）
             "max_workers": 4     // 可选，并发数（默认4）
         }
-    
+
     Returns:
         JSON with task_id, e.g.
         {
@@ -205,49 +205,49 @@ def export_editable_pptx(project_id):
             },
             "message": "Export task created"
         }
-    
+
     轮询 /api/projects/{project_id}/tasks/{task_id} 获取进度和下载链接
     """
     try:
         project = Project.query.get(project_id)
-        
+
         if not project:
             return not_found('Project')
-        
+
         # Get parameters from request body
         data = request.get_json() or {}
-        
+
         # Get page_ids from request body and fetch filtered pages
         selected_page_ids = parse_page_ids_from_body(data)
         pages = get_filtered_pages(project_id, selected_page_ids if selected_page_ids else None)
-        
+
         if not pages:
             return bad_request("No pages found for project")
-        
+
         # Check if pages have generated images
         has_images = any(page.generated_image_path for page in pages)
         if not has_images:
             return bad_request("No generated images found for project")
-        
+
         # Get parameters from request body
         data = request.get_json() or {}
         filename = data.get('filename', f'presentation_editable_{project_id}.pptx')
         if not filename.endswith('.pptx'):
             filename += '.pptx'
-        
+
         # 递归分析参数
         # max_depth 语义：1=只处理表层不递归，2=递归一层（处理图片/图表中的子元素）
         max_depth = data.get('max_depth', 1)  # 默认不递归，与测试脚本一致
         max_workers = data.get('max_workers', 4)
-        
+
         # Validate parameters
         # max_depth >= 1: 至少处理表层元素
         if not isinstance(max_depth, int) or max_depth < 1 or max_depth > 5:
             return bad_request("max_depth must be an integer between 1 and 5")
-        
+
         if not isinstance(max_workers, int) or max_workers < 1 or max_workers > 16:
             return bad_request("max_workers must be an integer between 1 and 16")
-        
+
         # Create task record
         task = Task(
             project_id=project_id,
@@ -256,23 +256,23 @@ def export_editable_pptx(project_id):
         )
         db.session.add(task)
         db.session.commit()
-        
+
         logger.info(f"Created export task {task.id} for project {project_id} (recursive analysis: depth={max_depth}, workers={max_workers})")
-        
+
         # Get services
         from services.file_service import FileService
         from services.task_manager import task_manager, export_editable_pptx_with_recursive_analysis_task
-        
+
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
-        
+
         # Get Flask app instance for background task
         app = current_app._get_current_object()
-        
+
         # 读取项目的导出设置
         export_extractor_method = project.export_extractor_method or 'hybrid'
         export_inpaint_method = project.export_inpaint_method or 'hybrid'
         logger.info(f"Export settings: extractor={export_extractor_method}, inpaint={export_inpaint_method}")
-        
+
         # 使用递归分析任务（不需要 ai_service，使用 ImageEditabilityService）
         task_manager.submit_task(
             task.id,
@@ -287,9 +287,9 @@ def export_editable_pptx(project_id):
             export_inpaint_method=export_inpaint_method,
             app=app
         )
-        
+
         logger.info(f"Submitted recursive export task {task.id} to task manager")
-        
+
         return success_response(
             data={
                 "task_id": task.id,
@@ -299,7 +299,109 @@ def export_editable_pptx(project_id):
             },
             message="Export task created (using recursive analysis)"
         )
-    
+
     except Exception as e:
         logger.exception("Error creating export task")
+        return error_response('SERVER_ERROR', str(e), 500)
+
+
+@export_bp.route('/<project_id>/export/editable-pptx-img2slides', methods=['GET'])
+def export_editable_pptx_img2slides(project_id):
+    """
+    GET /api/projects/{project_id}/export/editable-pptx-img2slides?filename=...&provider=...
+
+    Export editable PPTX using img2slides vision analysis
+
+    Query params:
+        - filename: Output filename (default: presentation_{project_id}_img2slides.pptx)
+        - provider: AI provider ("claude" or "gemini", default: "gemini")
+        - model: Model override (optional)
+        - crop_padding: Crop padding percentage (default: 1.0)
+
+    Returns:
+        JSON with download URL
+    """
+    try:
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        project = Project.query.get(project_id)
+        if not project:
+            return not_found('Project')
+
+        # Get all completed pages
+        pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+        if not pages:
+            return bad_request("No pages found for project")
+
+        # Get image paths
+        file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+        image_paths = []
+        for page in pages:
+            if page.generated_image_path:
+                abs_path = file_service.get_absolute_path(page.generated_image_path)
+                image_paths.append(abs_path)
+
+        if not image_paths:
+            return bad_request("No generated images found for project")
+
+        # Get parameters
+        filename = request.args.get('filename', f'presentation_{project_id}_img2slides.pptx')
+        if not filename.endswith('.pptx'):
+            filename += '.pptx'
+
+        provider = request.args.get('provider', 'gemini')  # Default to gemini
+        model = request.args.get('model', 'gemini-3-pro-high')  # Default to high quality model
+        crop_padding = float(request.args.get('crop_padding', 1.0))
+
+        # Get API key and base_url from settings or environment
+        settings = Settings.get_settings()
+        api_key = None
+        base_url = None
+        if provider == 'claude':
+            # Claude API key and base URL from environment variables
+            api_key = os.environ.get('ANTHROPIC_API_KEY')
+            base_url = os.environ.get('ANTHROPIC_BASE_URL')
+        elif provider == 'gemini':
+            # Gemini uses the configured API key and base URL in settings
+            api_key = settings.api_key
+            base_url = settings.api_base_url
+
+        if not api_key:
+            return bad_request(f"API key for provider '{provider}' not configured")
+
+        # Determine export directory
+        exports_dir = file_service._get_exports_dir(project_id)
+        output_path = os.path.join(exports_dir, filename)
+
+        # Generate editable PPTX using img2slides
+        logger.info(f"Generating editable PPTX with img2slides: {len(image_paths)} slides, provider={provider}")
+        ExportService.create_editable_pptx_with_img2slides(
+            image_paths,
+            output_file=output_path,
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            crop_padding=crop_padding
+        )
+
+        # Build download URLs
+        download_path = f"/files/{project_id}/exports/{filename}"
+        base_url = request.url_root.rstrip("/")
+        download_url_absolute = f"{base_url}{download_path}"
+
+        return success_response(
+            data={
+                "download_url": download_path,
+                "download_url_absolute": download_url_absolute,
+            },
+            message=f"Editable PPTX generated successfully with img2slides ({provider})"
+        )
+
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to export editable PPTX: {str(e)}", exc_info=True)
         return error_response('SERVER_ERROR', str(e), 500)

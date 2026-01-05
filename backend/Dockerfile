@@ -37,6 +37,7 @@ RUN chmod +x /usr/local/bin/uv
 # 复制项目配置文件
 COPY pyproject.toml ./
 COPY uv.lock* ./
+COPY img2slides/ ./img2slides/
 
 # 配置 PyPI 镜像源（如果指定）
 ENV UV_INDEX_URL=${PYPI_INDEX_URL}
@@ -69,4 +70,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # 启动应用
 CMD ["sh", "-c", "uv run --directory backend alembic upgrade head && uv run --directory backend python app.py"]
-

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "banana-slides"
 version = "0.3.0"
@@ -21,6 +25,7 @@ dependencies = [
     "alembic>=1.13.0",
     "flask-migrate>=4.0.0",
     "img2pdf>=0.5.1",
+    "img2slides",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +40,13 @@ test = [
 ]
 
 [tool.uv]
-index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+# index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"  # Disabled - using default PyPI
+
+[tool.uv.sources]
+img2slides = { path = "img2slides" }
+
+[tool.setuptools]
+packages = []
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

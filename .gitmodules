@@ -1,0 +1,3 @@
+[submodule "img2slides"]
+	path = img2slides
+	url = https://github.com/lzfxxx/img2slides.git
