@@ -7,7 +7,7 @@ const API_BASE_URL = '';
 // 创建 axios 实例
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 600000, // 10分钟超时（img2slides分析多张幻灯片可能很慢）
+  timeout: 120000, // 2分钟超时
 });
 
 // 请求拦截器
