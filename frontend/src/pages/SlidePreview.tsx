@@ -662,23 +662,34 @@ export const SlidePreview: React.FC = () => {
           pollExportTask(exportTaskId, projectId, taskId);
         }
       } else if (type === 'editable-pptx-vision') {
-        // Vision export using img2slides - synchronous, direct download
-        show({ message: 'Vision导出进行中，请稍候...', type: 'success' });
+        // Vision export using img2slides - async with polling (like editable-pptx)
+        addTask({
+          id: exportTaskId,
+          taskId: '', // Will be updated below
+          projectId,
+          type: 'editable-pptx',
+          status: 'PROCESSING',
+          pageIds: pageIds,
+        });
+
+        show({ message: 'Vision导出任务已开始，可在导出任务面板查看进度', type: 'success' });
 
         const response = await apiExportEditablePPTXVision(projectId, 'gemini');
-        const downloadUrl = response.data?.download_url || response.data?.download_url_absolute;
-        if (downloadUrl) {
+        const taskId = response.data?.task_id;
+
+        if (taskId) {
+          // Update task with real taskId
           addTask({
             id: exportTaskId,
-            taskId: '',
+            taskId,
             projectId,
             type: 'editable-pptx',
-            status: 'COMPLETED',
-            downloadUrl,
+            status: 'PROCESSING',
             pageIds: pageIds,
           });
-          window.open(downloadUrl, '_blank');
-          show({ message: 'Vision导出成功', type: 'success' });
+
+          // Start polling in background (non-blocking)
+          pollExportTask(exportTaskId, projectId, taskId);
         }
       }
     } catch (error: any) {
@@ -897,7 +908,7 @@ export const SlidePreview: React.FC = () => {
           >
             <span className="hidden sm:inline">返回</span>
           </Button>
-          <div className="flex items-center gap-1.5 md:gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 md:gap-2 min-w-0 hidden">
             <span className="text-xl md:text-2xl">🍌</span>
             <span className="text-base md:text-xl font-bold truncate">蕉幻</span>
           </div>

@@ -471,15 +471,17 @@ export const exportEditablePPTX = async (
 
 /**
  * 导出为可编辑PPTX（Vision识别版，使用img2slides）
- * 同步接口，直接返回下载链接
+ * 异步接口，返回任务ID，需要轮询获取进度和下载链接
  */
 export const exportEditablePPTXImg2Slides = async (
   projectId: string,
   provider: 'claude' | 'gemini' = 'gemini'
-): Promise<ApiResponse<{ download_url: string; download_url_absolute?: string }>> => {
-  const response = await apiClient.get<
-    ApiResponse<{ download_url: string; download_url_absolute?: string }>
-  >(`/api/projects/${projectId}/export/editable-pptx-img2slides?provider=${provider}`);
+): Promise<ApiResponse<{ task_id: string; method: string }>> => {
+  const response = await apiClient.post<
+    ApiResponse<{ task_id: string; method: string }>
+  >(`/api/projects/${projectId}/export/editable-pptx-img2slides`, {
+    provider
+  });
   return response.data;
 };
 

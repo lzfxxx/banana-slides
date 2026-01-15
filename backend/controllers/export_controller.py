@@ -305,27 +305,36 @@ def export_editable_pptx(project_id):
         return error_response('SERVER_ERROR', str(e), 500)
 
 
-@export_bp.route('/<project_id>/export/editable-pptx-img2slides', methods=['GET'])
+@export_bp.route('/<project_id>/export/editable-pptx-img2slides', methods=['POST'])
 def export_editable_pptx_img2slides(project_id):
     """
-    GET /api/projects/{project_id}/export/editable-pptx-img2slides?filename=...&provider=...
+    POST /api/projects/{project_id}/export/editable-pptx-img2slides - 导出可编辑PPTX（异步，使用 img2slides）
 
-    Export editable PPTX using img2slides vision analysis
+    使用 img2slides 视觉分析方法，并行处理图片以加速导出
 
-    Query params:
-        - filename: Output filename (default: presentation_{project_id}_img2slides.pptx)
-        - provider: AI provider ("claude" or "gemini", default: "gemini")
-        - model: Model override (optional)
-        - crop_padding: Crop padding percentage (default: 1.0)
+    Request body (JSON):
+        {
+            "filename": "optional_custom_name.pptx",
+            "provider": "gemini",  // 或 "claude"
+            "model": "gemini-3-pro-preview",  // 可选
+            "crop_padding": 1.0,  // 可选
+            "max_workers": 5  // 可选，并行处理数
+        }
 
     Returns:
-        JSON with download URL
+        JSON with task_id, e.g.
+        {
+            "success": true,
+            "data": {
+                "task_id": "uuid-here",
+                "method": "img2slides"
+            },
+            "message": "Export task created"
+        }
+
+    轮询 /api/projects/{project_id}/tasks/{task_id} 获取进度和下载链接
     """
     try:
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         project = Project.query.get(project_id)
         if not project:
             return not_found('Project')
@@ -346,14 +355,21 @@ def export_editable_pptx_img2slides(project_id):
         if not image_paths:
             return bad_request("No generated images found for project")
 
-        # Get parameters
-        filename = request.args.get('filename', f'presentation_{project_id}_img2slides.pptx')
+        # Get parameters from request body
+        data = request.get_json() or {}
+
+        filename = data.get('filename', f'presentation_{project_id}_img2slides.pptx')
         if not filename.endswith('.pptx'):
             filename += '.pptx'
 
-        provider = request.args.get('provider', 'gemini')  # Default to gemini
-        model = request.args.get('model', 'gemini-3-pro-high')  # Default to high quality model
-        crop_padding = float(request.args.get('crop_padding', 1.0))
+        provider = data.get('provider', 'gemini')  # Default to gemini
+        model = data.get('model', 'gemini-3-pro-preview')  # Default to high quality model
+        crop_padding = float(data.get('crop_padding', 1.0))
+        max_workers = int(data.get('max_workers', 5))
+
+        # Validate max_workers
+        if max_workers < 1 or max_workers > 10:
+            return bad_request("max_workers must be between 1 and 10")
 
         # Get API key and base_url from settings or environment
         settings = Settings.get_settings()
@@ -371,37 +387,50 @@ def export_editable_pptx_img2slides(project_id):
         if not api_key:
             return bad_request(f"API key for provider '{provider}' not configured")
 
-        # Determine export directory
-        exports_dir = file_service._get_exports_dir(project_id)
-        output_path = os.path.join(exports_dir, filename)
+        # Create task record
+        task = Task(
+            project_id=project_id,
+            task_type='EXPORT_EDITABLE_PPTX_IMG2SLIDES',
+            status='PENDING'
+        )
+        db.session.add(task)
+        db.session.commit()
 
-        # Generate editable PPTX using img2slides
-        logger.info(f"Generating editable PPTX with img2slides: {len(image_paths)} slides, provider={provider}")
-        ExportService.create_editable_pptx_with_img2slides(
-            image_paths,
-            output_file=output_path,
+        logger.info(f"Created export task {task.id} for project {project_id} (img2slides: provider={provider}, workers={max_workers})")
+
+        # Get Flask app instance for background task
+        app = current_app._get_current_object()
+
+        # Submit background task
+        from services.task_manager import task_manager, export_editable_pptx_img2slides_task
+
+        task_manager.submit_task(
+            task.id,
+            export_editable_pptx_img2slides_task,
+            project_id=project_id,
+            filename=filename,
+            image_paths=image_paths,
             provider=provider,
             api_key=api_key,
             base_url=base_url,
             model=model,
-            crop_padding=crop_padding
+            crop_padding=crop_padding,
+            max_workers=max_workers,
+            app=app
         )
 
-        # Build download URLs
-        download_path = f"/files/{project_id}/exports/{filename}"
-        base_url = request.url_root.rstrip("/")
-        download_url_absolute = f"{base_url}{download_path}"
+        logger.info(f"Submitted img2slides export task {task.id} to task manager")
 
         return success_response(
             data={
-                "download_url": download_path,
-                "download_url_absolute": download_url_absolute,
+                "task_id": task.id,
+                "method": "img2slides",
+                "provider": provider,
+                "max_workers": max_workers
             },
-            message=f"Editable PPTX generated successfully with img2slides ({provider})"
+            message="Export task created (using img2slides vision analysis)"
         )
 
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Failed to export editable PPTX: {str(e)}", exc_info=True)
+        logger.exception("Error creating export task")
         return error_response('SERVER_ERROR', str(e), 500)

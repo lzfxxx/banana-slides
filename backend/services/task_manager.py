@@ -1015,3 +1015,194 @@ def export_editable_pptx_with_recursive_analysis_task(
                 task.error_message = str(e)
                 task.completed_at = datetime.utcnow()
                 db.session.commit()
+
+
+def export_editable_pptx_img2slides_task(
+    task_id: str,
+    project_id: str,
+    filename: str,
+    image_paths: List[str],
+    provider: str = "gemini",
+    api_key: str = None,
+    base_url: str = None,
+    model: str = None,
+    crop_padding: float = 1.0,
+    max_workers: int = 5,
+    app=None
+):
+    """
+    使用 img2slides 导出可编辑 PPTX 的后台任务
+
+    并行分析图片以加速处理
+
+    Args:
+        task_id: 任务ID
+        project_id: 项目ID
+        filename: 输出文件名
+        image_paths: 图片路径列表
+        provider: AI 提供商 ("claude" or "gemini")
+        api_key: API 密钥
+        base_url: API base URL
+        model: 模型名称
+        crop_padding: 裁剪边距
+        max_workers: 并行分析的最大线程数
+        app: Flask 应用实例
+    """
+    logger.info(f"🚀 Task {task_id} started: export_editable_pptx_img2slides (project={project_id}, slides={len(image_paths)}, workers={max_workers})")
+
+    if app is None:
+        raise ValueError("Flask app instance must be provided")
+
+    with app.app_context():
+        import os
+        from datetime import datetime
+        from img2slides.analyzer import analyze_image
+        from img2slides.generator import generate_pptx
+
+        try:
+            # 更新任务状态
+            task = Task.query.get(task_id)
+            if not task:
+                logger.error(f"Task {task_id} not found")
+                return
+
+            task.status = 'PROCESSING'
+            task.set_progress({
+                "total": len(image_paths),
+                "completed": 0,
+                "failed": 0,
+                "current_step": "准备中..."
+            })
+            db.session.commit()
+
+            # 并行分析图片
+            structures = [None] * len(image_paths)
+            completed = 0
+            failed = 0
+
+            def analyze_single(idx: int, path: str):
+                """分析单张图片"""
+                try:
+                    structure = analyze_image(
+                        image_path=Path(path),
+                        provider=provider,
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model
+                    )
+                    return idx, structure, None
+                except Exception as e:
+                    logger.error(f"Failed to analyze image {idx}: {e}")
+                    return idx, None, str(e)
+
+            logger.info(f"开始并行分析 {len(image_paths)} 张图片 (max_workers={max_workers})")
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(analyze_single, i, p): i
+                    for i, p in enumerate(image_paths)
+                }
+
+                for future in as_completed(futures):
+                    idx, structure, error = future.result()
+
+                    if error:
+                        failed += 1
+                        logger.warning(f"图片 {idx} 分析失败: {error}")
+                    else:
+                        structures[idx] = structure
+                        completed += 1
+                        logger.info(f"✓ 图片 {idx + 1}/{len(image_paths)} 分析完成")
+
+                    # 更新进度
+                    task = Task.query.get(task_id)
+                    if task:
+                        task.set_progress({
+                            "total": len(image_paths),
+                            "completed": completed,
+                            "failed": failed,
+                            "current_step": f"分析幻灯片 {completed + failed}/{len(image_paths)}"
+                        })
+                        db.session.commit()
+
+            # 检查是否有失败
+            if failed > 0:
+                # 过滤掉 None 值
+                structures = [s for s in structures if s is not None]
+                if not structures:
+                    raise ValueError(f"所有 {len(image_paths)} 张图片分析都失败了")
+                logger.warning(f"{failed} 张图片分析失败，继续处理剩余 {len(structures)} 张")
+
+            # 更新进度：生成 PPTX
+            task = Task.query.get(task_id)
+            if task:
+                task.set_progress({
+                    "total": len(image_paths),
+                    "completed": completed,
+                    "failed": failed,
+                    "current_step": "生成可编辑 PPTX..."
+                })
+                db.session.commit()
+
+            # 准备输出路径
+            uploads_folder = app.config.get('UPLOAD_FOLDER', 'uploads')
+            exports_dir = os.path.join(uploads_folder, project_id, 'exports')
+            os.makedirs(exports_dir, exist_ok=True)
+
+            if not filename.endswith('.pptx'):
+                filename += '.pptx'
+
+            output_path = os.path.join(exports_dir, filename)
+
+            # 处理文件名冲突
+            if os.path.exists(output_path):
+                base_name = filename.rsplit('.', 1)[0]
+                timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+                filename = f"{base_name}_{timestamp}.pptx"
+                output_path = os.path.join(exports_dir, filename)
+
+            # 生成 PPTX
+            logger.info(f"生成可编辑 PPTX: {output_path}")
+
+            # 只使用成功分析的图片
+            valid_image_paths = [p for i, p in enumerate(image_paths) if structures[i] is not None] if failed > 0 else image_paths
+
+            generate_pptx(
+                structures,
+                output_path,
+                source_images=[Path(p) for p in valid_image_paths],
+                crop_padding=crop_padding
+            )
+
+            # 构建下载 URL
+            download_path = f"/files/{project_id}/exports/{filename}"
+
+            # 标记任务完成
+            task = Task.query.get(task_id)
+            if task:
+                task.status = 'COMPLETED'
+                task.completed_at = datetime.utcnow()
+                task.set_progress({
+                    "total": len(image_paths),
+                    "completed": completed,
+                    "failed": failed,
+                    "current_step": "✓ 导出完成",
+                    "download_url": download_path,
+                    "filename": filename,
+                    "method": "img2slides"
+                })
+                db.session.commit()
+                logger.info(f"✓ 任务 {task_id} 完成 - img2slides 导出成功 ({completed} 成功, {failed} 失败)")
+
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"✗ 任务 {task_id} 失败: {error_detail}")
+
+            # 标记任务失败
+            task = Task.query.get(task_id)
+            if task:
+                task.status = 'FAILED'
+                task.error_message = str(e)
+                task.completed_at = datetime.utcnow()
+                db.session.commit()
