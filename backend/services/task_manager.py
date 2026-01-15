@@ -1055,6 +1055,7 @@ def export_editable_pptx_img2slides_task(
 
     with app.app_context():
         import os
+        import time
         from datetime import datetime
         from img2slides.analyzer import analyze_image
         from img2slides.generator import generate_pptx
@@ -1079,23 +1080,35 @@ def export_editable_pptx_img2slides_task(
             structures = [None] * len(image_paths)
             completed = 0
             failed = 0
+            max_attempts = max(1, app.config.get("GENAI_MAX_RETRIES", 2) + 1)
 
             def analyze_single(idx: int, path: str):
                 """分析单张图片"""
-                try:
-                    structure = analyze_image(
-                        image_path=Path(path),
-                        provider=provider,
-                        api_key=api_key,
-                        base_url=base_url,
-                        model=model
-                    )
-                    return idx, structure, None
-                except Exception as e:
-                    logger.error(f"Failed to analyze image {idx}: {e}")
-                    return idx, None, str(e)
+                last_error = None
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        structure = analyze_image(
+                            image_path=Path(path),
+                            provider=provider,
+                            api_key=api_key,
+                            base_url=base_url,
+                            model=model
+                        )
+                        if structure is None:
+                            raise ValueError("Empty analysis result")
+                        return idx, structure, None
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_attempts:
+                            logger.warning(
+                                f"图片 {idx} 分析失败 (attempt {attempt}/{max_attempts}): {e}"
+                            )
+                            time.sleep(1 * attempt)
+                return idx, None, str(last_error)
 
-            logger.info(f"开始并行分析 {len(image_paths)} 张图片 (max_workers={max_workers})")
+            logger.info(
+                f"开始并行分析 {len(image_paths)} 张图片 (max_workers={max_workers}, attempts={max_attempts})"
+            )
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
@@ -1126,11 +1139,14 @@ def export_editable_pptx_img2slides_task(
                         db.session.commit()
 
             # 检查是否有失败
+            valid_image_paths = image_paths
             if failed > 0:
-                # 过滤掉 None 值
-                structures = [s for s in structures if s is not None]
-                if not structures:
+                valid_pairs = [(p, s) for p, s in zip(image_paths, structures) if s is not None]
+                if not valid_pairs:
                     raise ValueError(f"所有 {len(image_paths)} 张图片分析都失败了")
+                valid_image_paths, structures = zip(*valid_pairs)
+                valid_image_paths = list(valid_image_paths)
+                structures = list(structures)
                 logger.warning(f"{failed} 张图片分析失败，继续处理剩余 {len(structures)} 张")
 
             # 更新进度：生成 PPTX
@@ -1163,9 +1179,6 @@ def export_editable_pptx_img2slides_task(
 
             # 生成 PPTX
             logger.info(f"生成可编辑 PPTX: {output_path}")
-
-            # 只使用成功分析的图片
-            valid_image_paths = [p for i, p in enumerate(image_paths) if structures[i] is not None] if failed > 0 else image_paths
 
             generate_pptx(
                 structures,
